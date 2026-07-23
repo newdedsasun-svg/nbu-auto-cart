@@ -1,0 +1,10 @@
+# Android/Gradle build output
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+
+# Local packages and temporary authorization output
+*.apk
+github-auth*.txt
