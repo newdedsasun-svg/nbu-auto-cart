@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Message;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.view.View;
@@ -45,6 +46,9 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     private static final String HOME = "https://coins.bank.gov.ua/";
     private static final String RELEASE_API = "https://api.github.com/repos/newdedsasun-svg/nbu-auto-cart/releases/latest";
+    private static final String MOBILE_CHROME_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 15; Mobile) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36";
     // Частіше ніж раз на секунду магазин може сприйняти перевірки як атаку
     // та заблокувати IP або обліковий запис.
     private static final long CHECK_DELAY_MS = 1000;
@@ -52,6 +56,8 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<String> urls = new ArrayList<>();
     private WebView webView;
+    private WebView popupWebView;
+    private LinearLayout root;
     private EditText linksInput;
     private TextView status;
     private Button startButton;
@@ -97,7 +103,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        LinearLayout root = new LinearLayout(this);
+        root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.WHITE);
 
@@ -146,12 +152,13 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setUserAgentString(MOBILE_CHROME_USER_AGENT);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(false);
-        settings.setUserAgentString(settings.getUserAgentString() + " NbuAutoCart/1.0");
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
-        webView.setWebChromeClient(new WebChromeClient());
+        settings.setSupportMultipleWindows(true);
+        webView.setWebChromeClient(createChromeClient());
         webView.addJavascriptInterface(new CartBridge(), "NbuCartApp");
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -187,6 +194,56 @@ public class MainActivity extends Activity {
         updateReceiverRegistered = true;
         stopButton.setEnabled(false);
         webView.loadUrl(HOME);
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private WebChromeClient createChromeClient() {
+        return new WebChromeClient() {
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+                closePopup();
+                popupWebView = new WebView(MainActivity.this);
+                WebSettings popupSettings = popupWebView.getSettings();
+                popupSettings.setJavaScriptEnabled(true);
+                popupSettings.setDomStorageEnabled(true);
+                popupSettings.setDatabaseEnabled(true);
+                popupSettings.setUserAgentString(MOBILE_CHROME_USER_AGENT);
+                popupSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+                popupSettings.setSupportMultipleWindows(true);
+                CookieManager.getInstance().setAcceptThirdPartyCookies(popupWebView, true);
+                popupWebView.setWebChromeClient(createChromeClient());
+                popupWebView.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView child, WebResourceRequest request) {
+                        Uri uri = request.getUrl();
+                        if ("https".equalsIgnoreCase(uri.getScheme())) return false;
+                        startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                        return true;
+                    }
+                });
+                webView.setVisibility(View.GONE);
+                root.addView(popupWebView, new LinearLayout.LayoutParams(-1, 0, 1));
+                WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
+                transport.setWebView(popupWebView);
+                resultMsg.sendToTarget();
+                setStatus("Відкрито вікно авторизації НБУ");
+                return true;
+            }
+
+            @Override
+            public void onCloseWindow(WebView window) {
+                closePopup();
+            }
+        };
+    }
+
+    private void closePopup() {
+        if (popupWebView != null) {
+            root.removeView(popupWebView);
+            popupWebView.destroy();
+            popupWebView = null;
+        }
+        if (webView != null) webView.setVisibility(View.VISIBLE);
     }
 
     private void checkForUpdate() {
@@ -339,7 +396,9 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) webView.goBack();
+        if (popupWebView != null && popupWebView.canGoBack()) popupWebView.goBack();
+        else if (popupWebView != null) closePopup();
+        else if (webView != null && webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
     }
 
@@ -347,6 +406,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         if (updateReceiverRegistered) unregisterReceiver(updateReceiver);
+        if (popupWebView != null) popupWebView.destroy();
         if (webView != null) webView.destroy();
         super.onDestroy();
     }
